@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
 
 func setupTestServer(t *testing.T) (*Server, func()) {

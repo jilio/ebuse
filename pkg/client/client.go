@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
 
 // HTTPClient implements EventStore interface via HTTP calls

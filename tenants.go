@@ -1,15 +1,19 @@
-package ebus
+package ebuse
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
+
+// validTenantName checks if a tenant name is safe to use in file paths
+var validTenantName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // TenantConfig represents a single tenant with their API key and database
 type TenantConfig struct {
@@ -77,6 +81,17 @@ func NewTenantManager(config *TenantsConfig) (*TenantManager, error) {
 		if tenant.Name == "" {
 			return nil, fmt.Errorf("tenant name cannot be empty")
 		}
+
+		// Validate tenant name to prevent path traversal attacks
+		if !validTenantName.MatchString(tenant.Name) {
+			return nil, fmt.Errorf("tenant %s: invalid name, only alphanumeric characters, hyphens, and underscores are allowed", tenant.Name)
+		}
+
+		// Prevent excessively long tenant names
+		if len(tenant.Name) > 100 {
+			return nil, fmt.Errorf("tenant %s: name too long (max 100 characters)", tenant.Name)
+		}
+
 		if tenant.APIKey == "" {
 			return nil, fmt.Errorf("tenant %s: API key cannot be empty", tenant.Name)
 		}

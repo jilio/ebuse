@@ -1,4 +1,4 @@
-# ebus Multi-Tenant Configuration
+# ebuse Multi-Tenant Configuration
 #
 # Each tenant gets their own isolated database named <name>.db
 # All databases are stored in the data_dir directory

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	eventbus "github.com/jilio/ebu"
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
 
 // EventStoreAdapter adapts HTTPClient to implement ebu's EventStore interface

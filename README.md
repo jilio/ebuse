@@ -1,6 +1,6 @@
-# ebus - Remote Event Storage Server for ebu
+# ebuse - Remote Event Storage Server for ebu
 
-`ebus` is a remote event storage server that provides persistent storage for the [ebu](https://github.com/jilio/ebu) event bus library. It uses SQLite for storage and provides an HTTP API with API key authentication.
+`ebuse` is a remote event storage server that provides persistent storage for the [ebu](https://github.com/jilio/ebu) event bus library. It uses SQLite for storage and provides an HTTP API with API key authentication.
 
 ## Features
 
@@ -28,7 +28,7 @@
 ## Installation
 
 ```bash
-go get github.com/jilio/ebus
+go get github.com/jilio/ebuse
 ```
 
 ## Server Setup
@@ -44,7 +44,7 @@ export PORT="8080"              # Optional, defaults to 8080
 export DB_PATH="events.db"      # Optional, defaults to events.db
 
 # Run the server
-go run ./cmd/ebus
+go run ./cmd/ebuse
 ```
 
 ### Multi-Tenant Mode (Recommended for SaaS)
@@ -71,7 +71,7 @@ tenants:
 
 ```bash
 export PORT="8080"  # Optional configuration
-./ebus -config tenants.yaml
+./ebuse -config tenants.yaml
 ```
 
 Each tenant gets:
@@ -87,14 +87,14 @@ FROM golang:1.24-alpine
 
 WORKDIR /app
 COPY . .
-RUN go build -o ebus ./cmd/ebus
+RUN go build -o ebuse ./cmd/ebuse
 
 ENV API_KEY=""
 ENV PORT="8080"
 ENV DB_PATH="/data/events.db"
 
 EXPOSE 8080
-CMD ["./ebus"]
+CMD ["./ebuse"]
 ```
 
 ## Client Usage
@@ -106,7 +106,7 @@ package main
 
 import (
     "github.com/jilio/ebu"
-    "github.com/jilio/ebus/pkg/client"
+    "github.com/jilio/ebuse/pkg/client"
 )
 
 func main() {
@@ -235,7 +235,7 @@ go run ./example/integration
 
 ```bash
 # 1. Start server in multi-tenant mode
-./ebus -config tenants.yaml
+./ebuse -config tenants.yaml
 
 # 2. Publish event to tenant "alice"
 curl -X POST http://localhost:8080/events \
@@ -284,8 +284,8 @@ go test ./pkg/server
 ## Architecture
 
 ```
-ebus/
-├── cmd/ebus/              # Server entry point
+ebuse/
+├── cmd/ebuse/              # Server entry point
 ├── internal/store/        # SQLite storage implementation
 ├── pkg/
 │   ├── client/            # HTTP client (implements ebu's EventStore)
@@ -346,7 +346,7 @@ tenants:
     api_key: "unique-key"    # API key for this tenant
 ```
 
-Run with: `./ebus -config tenants.yaml`
+Run with: `./ebuse -config tenants.yaml`
 
 ### Choosing a Mode
 
