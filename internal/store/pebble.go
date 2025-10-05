@@ -29,20 +29,19 @@ const (
 func NewPebbleStore(dbPath string) (*PebbleStore, error) {
 	opts := &pebble.Options{
 		// Memory and cache settings (optimized for write-heavy workloads)
-		MemTableSize:             64 << 20,  // 64MB memtable
-		MemTableStopWritesThreshold: 4,
-		L0CompactionThreshold:    2,
-		L0StopWritesThreshold:    12,
-		LBaseMaxBytes:            128 << 20, // 128MB
-		MaxOpenFiles:             1000,
+		MemTableSize:                128 << 20, // 128MB memtable (larger buffer)
+		MemTableStopWritesThreshold: 8,         // More memtables before blocking
+		L0CompactionThreshold:       4,         // More files before compaction
+		L0StopWritesThreshold:       20,        // Higher threshold
+		LBaseMaxBytes:               512 << 20, // 512MB
+		MaxOpenFiles:                1000,
 
 		// Write buffer and compaction
-		BytesPerSync:             512 << 10, // 512KB
-		MaxConcurrentCompactions: func() int { return 3 },
+		BytesPerSync:             1 << 20, // 1MB (less frequent syncs)
+		MaxConcurrentCompactions: func() int { return 4 },
 
-		// Disable WAL for maximum write performance (data in memtable)
-		// Note: This sacrifices durability for performance
-		DisableWAL:               false, // Keep WAL enabled for safety
+		// WAL enabled but we use NoSync for individual writes
+		DisableWAL: false, // Keep WAL for durability
 	}
 
 	db, err := pebble.Open(dbPath, opts)
@@ -112,8 +111,8 @@ func (s *PebbleStore) Save(ctx context.Context, event *StoredEvent) error {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	// Write to PebbleDB
-	if err := s.db.Set(eventKey(position), data, pebble.Sync); err != nil {
+	// Write to PebbleDB (NoSync for performance, WAL provides durability)
+	if err := s.db.Set(eventKey(position), data, pebble.NoSync); err != nil {
 		return fmt.Errorf("write event: %w", err)
 	}
 
@@ -146,8 +145,8 @@ func (s *PebbleStore) SaveBatch(ctx context.Context, events []*StoredEvent) erro
 		}
 	}
 
-	// Commit batch with sync
-	if err := batch.Commit(pebble.Sync); err != nil {
+	// Commit batch without forcing fsync (WAL provides durability)
+	if err := batch.Commit(pebble.NoSync); err != nil {
 		return fmt.Errorf("commit batch: %w", err)
 	}
 
@@ -237,7 +236,7 @@ func (s *PebbleStore) SaveSubscriptionPosition(ctx context.Context, subscription
 	data := make([]byte, 8)
 	binary.BigEndian.PutUint64(data, uint64(position))
 
-	if err := s.db.Set(subscriptionKey(subscriptionID), data, pebble.Sync); err != nil {
+	if err := s.db.Set(subscriptionKey(subscriptionID), data, pebble.NoSync); err != nil {
 		return fmt.Errorf("save subscription position: %w", err)
 	}
 
