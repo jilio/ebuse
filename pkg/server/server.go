@@ -15,7 +15,7 @@ import (
 
 // Server provides HTTP API for remote event storage
 type Server struct {
-	store       *store.SQLiteStore
+	store       store.EventStore
 	apiKey      string
 	mux         *http.ServeMux
 	rateLimiter *rateLimiter
@@ -38,7 +38,7 @@ func DefaultConfig() *Config {
 }
 
 // New creates a new event storage server (deprecated: use NewWithConfig)
-func New(store *store.SQLiteStore) *Server {
+func New(store store.EventStore) *Server {
 	apiKey := os.Getenv("API_KEY")
 	if apiKey == "" {
 		log.Fatal("API_KEY environment variable must be set")
@@ -47,7 +47,7 @@ func New(store *store.SQLiteStore) *Server {
 }
 
 // NewWithConfig creates a server with custom configuration
-func NewWithConfig(store *store.SQLiteStore, config *Config, apiKey string) *Server {
+func NewWithConfig(store store.EventStore, config *Config, apiKey string) *Server {
 	s := &Server{
 		store:       store,
 		apiKey:      apiKey,
