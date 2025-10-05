@@ -1,0 +1,11 @@
+data_dir: "data"
+
+tenants:
+  - name: "alice"
+    api_key: "alice-key-123"
+
+  - name: "bob"
+    api_key: "bob-key-456"
+
+  - name: "charlie"
+    api_key: "charlie-key-789"

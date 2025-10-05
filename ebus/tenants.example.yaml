@@ -1,0 +1,27 @@
+# ebus Multi-Tenant Configuration
+#
+# Each tenant gets their own isolated database named <name>.db
+# All databases are stored in the data_dir directory
+
+# Optional: Directory where tenant databases will be stored
+# Default: "data"
+data_dir: "data"
+
+# List of tenants with their API keys
+tenants:
+  - name: "alice"
+    api_key: "alice-secret-key-123"
+
+  - name: "bob"
+    api_key: "bob-secret-key-456"
+
+  - name: "charlie"
+    api_key: "charlie-secret-key-789"
+
+# Database files created:
+# - data/alice.db
+# - data/bob.db
+# - data/charlie.db
+
+# Each tenant's data is completely isolated
+# Use the X-API-Key header with the corresponding key to access each tenant's data
