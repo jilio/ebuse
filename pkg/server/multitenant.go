@@ -21,7 +21,7 @@ type MultiTenantServer struct {
 
 // TenantManager interface for managing multiple tenants
 type TenantManager interface {
-	GetStore(apiKey string) (*store.SQLiteStore, string, bool)
+	GetStore(apiKey string) (store.EventStore, string, bool)
 	GetAllTenants() []string
 	Close() error
 }
@@ -112,8 +112,8 @@ func (s *MultiTenantServer) authMiddleware(next http.HandlerFunc) http.HandlerFu
 }
 
 // getTenantStore extracts tenant store from context
-func getTenantStore(r *http.Request) (*store.SQLiteStore, string, bool) {
-	tenantStore, ok := r.Context().Value("tenant_store").(*store.SQLiteStore)
+func getTenantStore(r *http.Request) (store.EventStore, string, bool) {
+	tenantStore, ok := r.Context().Value("tenant_store").(store.EventStore)
 	if !ok {
 		return nil, "", false
 	}

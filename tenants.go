@@ -23,8 +23,9 @@ type TenantConfig struct {
 
 // TenantsConfig holds all tenant configurations
 type TenantsConfig struct {
-	Tenants []TenantConfig `yaml:"tenants"`
-	DataDir string         `yaml:"data_dir,omitempty"` // Optional: directory for databases
+	Tenants      []TenantConfig `yaml:"tenants"`
+	DataDir      string         `yaml:"data_dir,omitempty"`      // Optional: directory for databases
+	StoreBackend string         `yaml:"store_backend,omitempty"` // Optional: "sqlite" or "pebble" (default: pebble)
 }
 
 // TenantManager manages multiple tenants and their isolated databases
@@ -37,7 +38,7 @@ type TenantManager struct {
 // TenantStore holds a tenant's database and metadata
 type TenantStore struct {
 	Name  string
-	Store *store.SQLiteStore
+	Store store.EventStore
 }
 
 // LoadTenantsConfig loads tenant configuration from YAML file
@@ -59,6 +60,16 @@ func LoadTenantsConfig(configPath string) (*TenantsConfig, error) {
 	// Default data directory
 	if config.DataDir == "" {
 		config.DataDir = "data"
+	}
+
+	// Default store backend
+	if config.StoreBackend == "" {
+		config.StoreBackend = "pebble"
+	}
+
+	// Validate store backend
+	if config.StoreBackend != "sqlite" && config.StoreBackend != "pebble" {
+		return nil, fmt.Errorf("invalid store_backend: %s (must be 'sqlite' or 'pebble')", config.StoreBackend)
 	}
 
 	return &config, nil
@@ -101,16 +112,27 @@ func NewTenantManager(config *TenantsConfig) (*TenantManager, error) {
 			return nil, fmt.Errorf("duplicate API key for tenant: %s", tenant.Name)
 		}
 
-		// Create database for tenant
-		dbPath := filepath.Join(config.DataDir, fmt.Sprintf("%s.db", tenant.Name))
-		sqliteStore, err := store.NewSQLiteStore(dbPath)
-		if err != nil {
-			return nil, fmt.Errorf("create store for tenant %s: %w", tenant.Name, err)
+		// Create store for tenant based on backend type
+		var eventStore store.EventStore
+		var err error
+
+		if config.StoreBackend == "sqlite" {
+			dbPath := filepath.Join(config.DataDir, fmt.Sprintf("%s.db", tenant.Name))
+			eventStore, err = store.NewSQLiteStore(dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("create sqlite store for tenant %s: %w", tenant.Name, err)
+			}
+		} else {
+			dbPath := filepath.Join(config.DataDir, tenant.Name)
+			eventStore, err = store.NewPebbleStore(dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("create pebble store for tenant %s: %w", tenant.Name, err)
+			}
 		}
 
 		tm.tenants[tenant.APIKey] = &TenantStore{
 			Name:  tenant.Name,
-			Store: sqliteStore,
+			Store: eventStore,
 		}
 	}
 
@@ -118,7 +140,7 @@ func NewTenantManager(config *TenantsConfig) (*TenantManager, error) {
 }
 
 // GetStore returns the store for a given API key
-func (tm *TenantManager) GetStore(apiKey string) (*store.SQLiteStore, string, bool) {
+func (tm *TenantManager) GetStore(apiKey string) (store.EventStore, string, bool) {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 

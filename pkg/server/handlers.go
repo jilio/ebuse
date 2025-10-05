@@ -15,7 +15,7 @@ import (
 
 // Shared handler implementations used by both single-tenant and multi-tenant servers
 
-func saveEventHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func saveEventHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	var event store.StoredEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
@@ -34,7 +34,7 @@ func saveEventHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteSt
 	json.NewEncoder(w).Encode(event)
 }
 
-func loadEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func loadEventsHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 
@@ -66,7 +66,7 @@ func loadEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteS
 	json.NewEncoder(w).Encode(events)
 }
 
-func batchEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func batchEventsHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -99,7 +99,7 @@ func batchEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLite
 	})
 }
 
-func streamEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func streamEventsHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -157,7 +157,7 @@ func streamEventsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLit
 	w.Write([]byte("]"))
 }
 
-func positionHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func positionHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -176,7 +176,7 @@ func positionHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteSto
 	json.NewEncoder(w).Encode(map[string]int64{"position": position})
 }
 
-func subscriptionsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore) {
+func subscriptionsHandler(w http.ResponseWriter, r *http.Request, st store.EventStore) {
 	path := strings.TrimPrefix(r.URL.Path, "/subscriptions/")
 	parts := strings.Split(path, "/")
 
@@ -197,7 +197,7 @@ func subscriptionsHandler(w http.ResponseWriter, r *http.Request, st *store.SQLi
 	}
 }
 
-func saveSubscriptionPositionHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore, subscriptionID string) {
+func saveSubscriptionPositionHandler(w http.ResponseWriter, r *http.Request, st store.EventStore, subscriptionID string) {
 	var req struct {
 		Position int64 `json:"position"`
 	}
@@ -217,7 +217,7 @@ func saveSubscriptionPositionHandler(w http.ResponseWriter, r *http.Request, st 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func loadSubscriptionPositionHandler(w http.ResponseWriter, r *http.Request, st *store.SQLiteStore, subscriptionID string) {
+func loadSubscriptionPositionHandler(w http.ResponseWriter, r *http.Request, st store.EventStore, subscriptionID string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
