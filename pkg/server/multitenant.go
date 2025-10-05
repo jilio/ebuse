@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,18 +47,18 @@ func NewMultiTenant(tenantManager TenantManager, config *Config) *MultiTenantSer
 }
 
 func (s *MultiTenantServer) setupRoutes() {
-	// Apply middleware chain: rate limit -> auth -> compression -> handler
+	// Apply middleware chain: logging -> rate limit -> auth -> compression -> handler
 	s.mux.HandleFunc("/events", s.chain(s.handleEvents, s.config.EnableGzip))
 	s.mux.HandleFunc("/events/batch", s.chain(s.handleBatchEvents, s.config.EnableGzip))
 	s.mux.HandleFunc("/events/stream", s.chain(s.handleStreamEvents, s.config.EnableGzip))
 	s.mux.HandleFunc("/position", s.chain(s.handlePosition, false))
 	s.mux.HandleFunc("/subscriptions/", s.chain(s.handleSubscriptions, false))
-	s.mux.HandleFunc("/health", s.handleHealth)
-	s.mux.HandleFunc("/metrics", s.authMiddleware(s.handleMetrics))
-	s.mux.HandleFunc("/tenants", s.authMiddleware(s.handleTenants))
+	s.mux.HandleFunc("/health", loggingMiddleware(s.handleHealth))
+	s.mux.HandleFunc("/metrics", loggingMiddleware(s.authMiddleware(s.handleMetrics)))
+	s.mux.HandleFunc("/tenants", loggingMiddleware(s.authMiddleware(s.handleTenants)))
 }
 
-// chain applies middleware in order: rate limit -> auth -> optional compression
+// chain applies middleware in order: logging -> rate limit -> auth -> optional compression
 func (s *MultiTenantServer) chain(handler http.HandlerFunc, enableCompression bool) http.HandlerFunc {
 	h := handler
 	if enableCompression {
@@ -65,6 +66,7 @@ func (s *MultiTenantServer) chain(handler http.HandlerFunc, enableCompression bo
 	}
 	h = s.authMiddleware(h)
 	h = s.rateLimiter.middleware(h)
+	h = loggingMiddleware(h)
 	return h
 }
 
@@ -79,7 +81,17 @@ func (s *MultiTenantServer) authMiddleware(next http.HandlerFunc) http.HandlerFu
 			}
 		}
 
+		// Extract IP for logging
+		ip := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			ip = strings.Split(forwarded, ",")[0]
+		}
+
 		if apiKey == "" {
+			slog.Warn("Authentication failed - no API key provided",
+				"ip", ip,
+				"path", r.URL.Path,
+				"method", r.Method)
 			http.Error(w, "API key required", http.StatusUnauthorized)
 			return
 		}
@@ -87,6 +99,10 @@ func (s *MultiTenantServer) authMiddleware(next http.HandlerFunc) http.HandlerFu
 		// Get store for this API key
 		tenantStore, tenantName, ok := s.tenantManager.GetStore(apiKey)
 		if !ok {
+			slog.Warn("Authentication failed - invalid API key",
+				"ip", ip,
+				"path", r.URL.Path,
+				"method", r.Method)
 			http.Error(w, "Invalid API key", http.StatusUnauthorized)
 			return
 		}

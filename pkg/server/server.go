@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -61,17 +62,17 @@ func NewWithConfig(store *store.SQLiteStore, config *Config, apiKey string) *Ser
 }
 
 func (s *Server) setupRoutes(config *Config) {
-	// Apply middleware chain: rate limit -> auth -> compression -> handler
+	// Apply middleware chain: logging -> rate limit -> auth -> compression -> handler
 	s.mux.HandleFunc("/events", s.chain(s.handleEvents, config.EnableGzip))
 	s.mux.HandleFunc("/events/batch", s.chain(s.handleBatchEvents, config.EnableGzip))
 	s.mux.HandleFunc("/events/stream", s.chain(s.handleStreamEvents, config.EnableGzip))
 	s.mux.HandleFunc("/position", s.chain(s.handlePosition, false))
 	s.mux.HandleFunc("/subscriptions/", s.chain(s.handleSubscriptions, false))
-	s.mux.HandleFunc("/health", s.handleHealth)
-	s.mux.HandleFunc("/metrics", s.authMiddleware(s.handleMetrics))
+	s.mux.HandleFunc("/health", loggingMiddleware(s.handleHealth))
+	s.mux.HandleFunc("/metrics", loggingMiddleware(s.authMiddleware(s.handleMetrics)))
 }
 
-// chain applies middleware in order: rate limit -> auth -> optional compression
+// chain applies middleware in order: logging -> rate limit -> auth -> optional compression
 func (s *Server) chain(handler http.HandlerFunc, enableCompression bool) http.HandlerFunc {
 	h := handler
 	if enableCompression {
@@ -79,6 +80,7 @@ func (s *Server) chain(handler http.HandlerFunc, enableCompression bool) http.Ha
 	}
 	h = s.authMiddleware(h)
 	h = s.rateLimiter.middleware(h)
+	h = loggingMiddleware(h)
 	return h
 }
 
@@ -94,6 +96,16 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if apiKey != s.apiKey {
+			// Extract IP for logging
+			ip := r.RemoteAddr
+			if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+				ip = strings.Split(forwarded, ",")[0]
+			}
+
+			slog.Warn("Authentication failed",
+				"ip", ip,
+				"path", r.URL.Path,
+				"method", r.Method)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
