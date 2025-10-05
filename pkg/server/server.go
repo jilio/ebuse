@@ -192,7 +192,7 @@ func (s *Server) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"saved": len(events),
 		"first_position": events[0].Position,
 		"last_position": events[len(events)-1].Position,
@@ -366,7 +366,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	position, _ := s.store.GetPosition(ctx)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"total_events": position,
 		"timestamp":    time.Now().Unix(),
 	})

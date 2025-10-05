@@ -99,10 +99,16 @@ func (s *MultiTenantServer) authMiddleware(next http.HandlerFunc) http.HandlerFu
 }
 
 // getTenantStore extracts tenant store from context
-func getTenantStore(r *http.Request) (*store.SQLiteStore, string) {
-	tenantStore := r.Context().Value("tenant_store").(*store.SQLiteStore)
-	tenantName := r.Context().Value("tenant_name").(string)
-	return tenantStore, tenantName
+func getTenantStore(r *http.Request) (*store.SQLiteStore, string, bool) {
+	tenantStore, ok := r.Context().Value("tenant_store").(*store.SQLiteStore)
+	if !ok {
+		return nil, "", false
+	}
+	tenantName, ok := r.Context().Value("tenant_name").(string)
+	if !ok {
+		return nil, "", false
+	}
+	return tenantStore, tenantName, true
 }
 
 // Event handlers (same as single-tenant but use tenant-specific store)
@@ -119,7 +125,11 @@ func (s *MultiTenantServer) handleEvents(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *MultiTenantServer) saveEvent(w http.ResponseWriter, r *http.Request) {
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	var event store.StoredEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
@@ -140,7 +150,11 @@ func (s *MultiTenantServer) saveEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *MultiTenantServer) loadEvents(w http.ResponseWriter, r *http.Request) {
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
@@ -179,7 +193,11 @@ func (s *MultiTenantServer) handleBatchEvents(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	var events []*store.StoredEvent
 	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
@@ -201,7 +219,7 @@ func (s *MultiTenantServer) handleBatchEvents(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"saved":          len(events),
 		"first_position": events[0].Position,
 		"last_position":  events[len(events)-1].Position,
@@ -214,7 +232,11 @@ func (s *MultiTenantServer) handleStreamEvents(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	fromStr := r.URL.Query().Get("from")
 	batchSizeStr := r.URL.Query().Get("batch_size")
@@ -274,7 +296,11 @@ func (s *MultiTenantServer) handlePosition(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -290,7 +316,11 @@ func (s *MultiTenantServer) handlePosition(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *MultiTenantServer) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
-	tenantStore, _ := getTenantStore(r)
+	tenantStore, _, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	path := strings.TrimPrefix(r.URL.Path, "/subscriptions/")
 	parts := strings.Split(path, "/")
@@ -354,7 +384,11 @@ func (s *MultiTenantServer) handleHealth(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *MultiTenantServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	tenantStore, tenantName := getTenantStore(r)
+	tenantStore, tenantName, ok := getTenantStore(r)
+	if !ok {
+		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -362,7 +396,7 @@ func (s *MultiTenantServer) handleMetrics(w http.ResponseWriter, r *http.Request
 	position, _ := tenantStore.GetPosition(ctx)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"tenant":       tenantName,
 		"total_events": position,
 		"timestamp":    time.Now().Unix(),
@@ -373,7 +407,7 @@ func (s *MultiTenantServer) handleTenants(w http.ResponseWriter, r *http.Request
 	tenants := s.tenantManager.GetAllTenants()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"tenants": tenants,
 		"count":   len(tenants),
 	})
