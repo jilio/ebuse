@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -14,36 +15,74 @@ import (
 )
 
 func main() {
+	// Parse command-line flags
+	configPath := flag.String("config", "", "Path to tenants.yaml for multi-tenant mode")
+	flag.Parse()
+
 	log.Println("=== ebuse Server ===")
 
 	// Load configuration from environment
 	config := ebuse.LoadConfigFromEnv()
 
-	if config.APIKey == "" {
-		log.Fatal("API_KEY environment variable must be set")
-	}
+	var httpHandler http.Handler
 
-	// Create SQLite store
-	sqliteStore, err := store.NewSQLiteStore(config.DBPath)
-	if err != nil {
-		log.Fatalf("Failed to create store: %v", err)
-	}
-	defer sqliteStore.Close()
+	// Check if running in multi-tenant mode
+	if *configPath != "" {
+		log.Printf("Config file: %s", *configPath)
+		tenantsConfig, err := ebuse.LoadTenantsConfig(*configPath)
+		if err != nil {
+			log.Fatalf("Failed to load tenants config: %v", err)
+		}
 
-	// Create server with configuration
-	serverConfig := &server.Config{
-		RateLimit:  config.RateLimit,
-		RateBurst:  config.RateBurst,
-		EnableGzip: config.EnableGzip,
-	}
+		tenantManager, err := ebuse.NewTenantManager(tenantsConfig)
+		if err != nil {
+			log.Fatalf("Failed to create tenant manager: %v", err)
+		}
+		defer tenantManager.Close()
 
-	srv := server.NewWithConfig(sqliteStore, serverConfig, config.APIKey)
-	defer srv.Close()
+		log.Printf("Initialized %d tenants: %v", len(tenantsConfig.Tenants), tenantManager.GetAllTenants())
+		log.Printf("Data directory: %s", tenantsConfig.DataDir)
+
+		serverConfig := &server.Config{
+			RateLimit:  config.RateLimit,
+			RateBurst:  config.RateBurst,
+			EnableGzip: config.EnableGzip,
+		}
+
+		srv := server.NewMultiTenant(tenantManager, serverConfig)
+		defer srv.Close()
+		httpHandler = srv
+	} else {
+		// Single-tenant mode
+		if config.APIKey == "" {
+			log.Fatal("API_KEY environment variable must be set (or use -config for multi-tenant mode)")
+		}
+
+		// Create SQLite store
+		sqliteStore, err := store.NewSQLiteStore(config.DBPath)
+		if err != nil {
+			log.Fatalf("Failed to create store: %v", err)
+		}
+		defer sqliteStore.Close()
+
+		// Create server with configuration
+		serverConfig := &server.Config{
+			RateLimit:  config.RateLimit,
+			RateBurst:  config.RateBurst,
+			EnableGzip: config.EnableGzip,
+		}
+
+		srv := server.NewWithConfig(sqliteStore, serverConfig, config.APIKey)
+		defer srv.Close()
+		httpHandler = srv
+
+		log.Printf("Database: %s", config.DBPath)
+	}
 
 	// Create HTTP server
 	httpServer := &http.Server{
 		Addr:         ":" + config.Port,
-		Handler:      srv,
+		Handler:      httpHandler,
 		ReadTimeout:  config.ReadTimeout,
 		WriteTimeout: config.WriteTimeout,
 		IdleTimeout:  config.IdleTimeout,
@@ -52,7 +91,6 @@ func main() {
 	// Start server in goroutine
 	go func() {
 		log.Printf("Server listening on :%s", config.Port)
-		log.Printf("Database: %s", config.DBPath)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}

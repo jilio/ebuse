@@ -5,4 +5,4 @@ nixPkgs = ["go"]
 cmds = ["go mod download", "go build -o ebuse ./cmd/ebuse"]
 
 [start]
-cmd = "./ebuse"
+cmd = "./ebuse -config /etc/ebuse/tenants.yaml"
