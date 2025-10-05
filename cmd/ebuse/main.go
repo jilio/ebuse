@@ -70,15 +70,31 @@ func main() {
 			os.Exit(1)
 		}
 
-		slog.Info("Running in single-tenant mode", "db_path", config.DBPath)
+		slog.Info("Running in single-tenant mode",
+			"db_path", config.DBPath,
+			"store_backend", config.StoreBackend)
 
-		// Create SQLite store
-		sqliteStore, err := store.NewSQLiteStore(config.DBPath)
-		if err != nil {
-			slog.Error("Failed to create store", "error", err, "db_path", config.DBPath)
+		// Create store based on backend type
+		var eventStore store.EventStore
+		var err error
+
+		if config.StoreBackend == "sqlite" {
+			eventStore, err = store.NewSQLiteStore(config.DBPath)
+			if err != nil {
+				slog.Error("Failed to create SQLite store", "error", err, "db_path", config.DBPath)
+				os.Exit(1)
+			}
+		} else if config.StoreBackend == "pebble" {
+			eventStore, err = store.NewPebbleStore(config.DBPath)
+			if err != nil {
+				slog.Error("Failed to create PebbleDB store", "error", err, "db_path", config.DBPath)
+				os.Exit(1)
+			}
+		} else {
+			slog.Error("Invalid STORE_BACKEND", "backend", config.StoreBackend)
 			os.Exit(1)
 		}
-		defer sqliteStore.Close()
+		defer eventStore.Close()
 
 		// Create server with configuration
 		serverConfig := &server.Config{
@@ -87,7 +103,7 @@ func main() {
 			EnableGzip: config.EnableGzip,
 		}
 
-		srv := server.NewWithConfig(sqliteStore, serverConfig, config.APIKey)
+		srv := server.NewWithConfig(eventStore, serverConfig, config.APIKey)
 		defer srv.Close()
 		httpHandler = srv
 	}
