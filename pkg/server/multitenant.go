@@ -6,73 +6,59 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
 
-// Server provides HTTP API for remote event storage
-type Server struct {
-	store       *store.SQLiteStore
-	apiKey      string
-	mux         *http.ServeMux
-	rateLimiter *rateLimiter
+// MultiTenantServer provides HTTP API with multi-tenant support
+type MultiTenantServer struct {
+	tenantManager TenantManager
+	mux           *http.ServeMux
+	rateLimiter   *rateLimiter
+	config        *Config
 }
 
-// Config holds server configuration
-type Config struct {
-	RateLimit      int  // Requests per second per IP
-	RateBurst      int  // Burst size for rate limiter
-	EnableGzip     bool // Enable gzip compression
+// TenantManager interface for managing multiple tenants
+type TenantManager interface {
+	GetStore(apiKey string) (*store.SQLiteStore, string, bool)
+	GetAllTenants() []string
+	Close() error
 }
 
-// DefaultConfig returns production-ready defaults
-func DefaultConfig() *Config {
-	return &Config{
-		RateLimit:  100, // 100 req/s per IP
-		RateBurst:  200, // Allow bursts up to 200
-		EnableGzip: true,
-	}
-}
-
-// New creates a new event storage server (deprecated: use NewWithConfig)
-func New(store *store.SQLiteStore) *Server {
-	apiKey := os.Getenv("API_KEY")
-	if apiKey == "" {
-		log.Fatal("API_KEY environment variable must be set")
-	}
-	return NewWithConfig(store, DefaultConfig(), apiKey)
-}
-
-// NewWithConfig creates a server with custom configuration
-func NewWithConfig(store *store.SQLiteStore, config *Config, apiKey string) *Server {
-	s := &Server{
-		store:       store,
-		apiKey:      apiKey,
-		mux:         http.NewServeMux(),
-		rateLimiter: newRateLimiter(config.RateLimit, config.RateBurst),
+// NewMultiTenant creates a new multi-tenant server
+func NewMultiTenant(tenantManager TenantManager, config *Config) *MultiTenantServer {
+	if config == nil {
+		config = DefaultConfig()
 	}
 
-	s.setupRoutes(config)
+	s := &MultiTenantServer{
+		tenantManager: tenantManager,
+		mux:           http.NewServeMux(),
+		rateLimiter:   newRateLimiter(config.RateLimit, config.RateBurst),
+		config:        config,
+	}
+
+	s.setupRoutes()
 	return s
 }
 
-func (s *Server) setupRoutes(config *Config) {
+func (s *MultiTenantServer) setupRoutes() {
 	// Apply middleware chain: rate limit -> auth -> compression -> handler
-	s.mux.HandleFunc("/events", s.chain(s.handleEvents, config.EnableGzip))
-	s.mux.HandleFunc("/events/batch", s.chain(s.handleBatchEvents, config.EnableGzip))
-	s.mux.HandleFunc("/events/stream", s.chain(s.handleStreamEvents, config.EnableGzip))
+	s.mux.HandleFunc("/events", s.chain(s.handleEvents, s.config.EnableGzip))
+	s.mux.HandleFunc("/events/batch", s.chain(s.handleBatchEvents, s.config.EnableGzip))
+	s.mux.HandleFunc("/events/stream", s.chain(s.handleStreamEvents, s.config.EnableGzip))
 	s.mux.HandleFunc("/position", s.chain(s.handlePosition, false))
 	s.mux.HandleFunc("/subscriptions/", s.chain(s.handleSubscriptions, false))
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/metrics", s.authMiddleware(s.handleMetrics))
+	s.mux.HandleFunc("/tenants", s.authMiddleware(s.handleTenants))
 }
 
 // chain applies middleware in order: rate limit -> auth -> optional compression
-func (s *Server) chain(handler http.HandlerFunc, enableCompression bool) http.HandlerFunc {
+func (s *MultiTenantServer) chain(handler http.HandlerFunc, enableCompression bool) http.HandlerFunc {
 	h := handler
 	if enableCompression {
 		h = compressionMiddleware(h)
@@ -82,8 +68,8 @@ func (s *Server) chain(handler http.HandlerFunc, enableCompression bool) http.Ha
 	return h
 }
 
-// authMiddleware validates the API_KEY header
-func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+// authMiddleware validates API key and injects tenant context
+func (s *MultiTenantServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey == "" {
@@ -93,17 +79,35 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		if apiKey != s.apiKey {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if apiKey == "" {
+			http.Error(w, "API key required", http.StatusUnauthorized)
 			return
 		}
 
-		next(w, r)
+		// Get store for this API key
+		tenantStore, tenantName, ok := s.tenantManager.GetStore(apiKey)
+		if !ok {
+			http.Error(w, "Invalid API key", http.StatusUnauthorized)
+			return
+		}
+
+		// Inject tenant info into context
+		ctx := context.WithValue(r.Context(), "tenant_store", tenantStore)
+		ctx = context.WithValue(ctx, "tenant_name", tenantName)
+		next(w, r.WithContext(ctx))
 	}
 }
 
-// handleEvents handles both GET (load) and POST (save) for events
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+// getTenantStore extracts tenant store from context
+func getTenantStore(r *http.Request) (*store.SQLiteStore, string) {
+	tenantStore := r.Context().Value("tenant_store").(*store.SQLiteStore)
+	tenantName := r.Context().Value("tenant_name").(string)
+	return tenantStore, tenantName
+}
+
+// Event handlers (same as single-tenant but use tenant-specific store)
+
+func (s *MultiTenantServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		s.saveEvent(w, r)
@@ -114,7 +118,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) saveEvent(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) saveEvent(w http.ResponseWriter, r *http.Request) {
+	tenantStore, _ := getTenantStore(r)
+
 	var event store.StoredEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
@@ -124,7 +130,7 @@ func (s *Server) saveEvent(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if err := s.store.Save(ctx, &event); err != nil {
+	if err := tenantStore.Save(ctx, &event); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save event: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -133,7 +139,9 @@ func (s *Server) saveEvent(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(event)
 }
 
-func (s *Server) loadEvents(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) loadEvents(w http.ResponseWriter, r *http.Request) {
+	tenantStore, _ := getTenantStore(r)
+
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 
@@ -155,7 +163,7 @@ func (s *Server) loadEvents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	events, err := s.store.Load(ctx, from, to)
+	events, err := tenantStore.Load(ctx, from, to)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load events: %v", err), http.StatusInternalServerError)
 		return
@@ -165,12 +173,13 @@ func (s *Server) loadEvents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(events)
 }
 
-// handleBatchEvents handles batch event insertion
-func (s *Server) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	tenantStore, _ := getTenantStore(r)
 
 	var events []*store.StoredEvent
 	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
@@ -186,25 +195,26 @@ func (s *Server) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	if err := s.store.SaveBatch(ctx, events); err != nil {
+	if err := tenantStore.SaveBatch(ctx, events); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save batch: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"saved": len(events),
+		"saved":          len(events),
 		"first_position": events[0].Position,
-		"last_position": events[len(events)-1].Position,
+		"last_position":  events[len(events)-1].Position,
 	})
 }
 
-// handleStreamEvents streams events for large replays
-func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	tenantStore, _ := getTenantStore(r)
 
 	fromStr := r.URL.Query().Get("from")
 	batchSizeStr := r.URL.Query().Get("batch_size")
@@ -225,15 +235,13 @@ func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Set headers for streaming
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
-	// Use JSON array streaming
 	w.Write([]byte("["))
 	first := true
 
-	err = s.store.LoadStream(ctx, from, batchSize, func(batch []*store.StoredEvent) error {
+	err = tenantStore.LoadStream(ctx, from, batchSize, func(batch []*store.StoredEvent) error {
 		for _, event := range batch {
 			if !first {
 				w.Write([]byte(","))
@@ -246,7 +254,6 @@ func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Write(data)
 
-			// Flush to client
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
@@ -261,16 +268,18 @@ func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("]"))
 }
 
-func (s *Server) handlePosition(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) handlePosition(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	tenantStore, _ := getTenantStore(r)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	position, err := s.store.GetPosition(ctx)
+	position, err := tenantStore.GetPosition(ctx)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get position: %v", err), http.StatusInternalServerError)
 		return
@@ -280,8 +289,9 @@ func (s *Server) handlePosition(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int64{"position": position})
 }
 
-func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
-	// Extract subscription ID from path: /subscriptions/{id}/position
+func (s *MultiTenantServer) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
+	tenantStore, _ := getTenantStore(r)
+
 	path := strings.TrimPrefix(r.URL.Path, "/subscriptions/")
 	parts := strings.Split(path, "/")
 
@@ -294,15 +304,15 @@ func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPost, http.MethodPut:
-		s.saveSubscriptionPosition(w, r, subscriptionID)
+		s.saveSubscriptionPosition(w, r, tenantStore, subscriptionID)
 	case http.MethodGet:
-		s.loadSubscriptionPosition(w, r, subscriptionID)
+		s.loadSubscriptionPosition(w, r, tenantStore, subscriptionID)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request, subscriptionID string) {
+func (s *MultiTenantServer) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request, tenantStore *store.SQLiteStore, subscriptionID string) {
 	var req struct {
 		Position int64 `json:"position"`
 	}
@@ -314,7 +324,7 @@ func (s *Server) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	if err := s.store.SaveSubscriptionPosition(ctx, subscriptionID, req.Position); err != nil {
+	if err := tenantStore.SaveSubscriptionPosition(ctx, subscriptionID, req.Position); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save subscription position: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -322,11 +332,11 @@ func (s *Server) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) loadSubscriptionPosition(w http.ResponseWriter, r *http.Request, subscriptionID string) {
+func (s *MultiTenantServer) loadSubscriptionPosition(w http.ResponseWriter, r *http.Request, tenantStore *store.SQLiteStore, subscriptionID string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	position, err := s.store.LoadSubscriptionPosition(ctx, subscriptionID)
+	position, err := tenantStore.LoadSubscriptionPosition(ctx, subscriptionID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load subscription position: %v", err), http.StatusInternalServerError)
 		return
@@ -336,51 +346,46 @@ func (s *Server) loadSubscriptionPosition(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]int64{"position": position})
 }
 
-// handleHealth provides health check endpoint
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
-	// Check database connectivity
-	_, err := s.store.GetPosition(ctx)
-	if err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status": "unhealthy",
-			"error":  err.Error(),
-		})
-		return
-	}
-
+func (s *MultiTenantServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "healthy",
 	})
 }
 
-// handleMetrics provides basic metrics
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	tenantStore, tenantName := getTenantStore(r)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	position, _ := s.store.GetPosition(ctx)
+	position, _ := tenantStore.GetPosition(ctx)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
+		"tenant":       tenantName,
 		"total_events": position,
 		"timestamp":    time.Now().Unix(),
 	})
 }
 
-// Close stops the server and cleans up resources
-func (s *Server) Close() error {
+func (s *MultiTenantServer) handleTenants(w http.ResponseWriter, r *http.Request) {
+	tenants := s.tenantManager.GetAllTenants()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"tenants": tenants,
+		"count":   len(tenants),
+	})
+}
+
+func (s *MultiTenantServer) Close() error {
 	if s.rateLimiter != nil {
 		s.rateLimiter.Stop()
 	}
-	return nil
+	return s.tenantManager.Close()
 }
 
-// ServeHTTP implements http.Handler
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *MultiTenantServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }

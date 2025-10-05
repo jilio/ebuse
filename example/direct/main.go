@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/jilio/ebus/internal/store"
-	"github.com/jilio/ebus/pkg/client"
+	"github.com/jilio/ebuse/internal/store"
+	"github.com/jilio/ebuse/pkg/client"
 )
 
 // Example event types
@@ -26,7 +26,7 @@ type UserUpdated struct {
 
 func main() {
 	// Create remote event store client
-	// Make sure ebus server is running: API_KEY=secret-key go run ./cmd/ebus
+	// Make sure ebuse server is running: API_KEY=secret-key go run ./cmd/ebuse
 	remoteStore := client.New(
 		"http://localhost:8080",
 		"secret-key",

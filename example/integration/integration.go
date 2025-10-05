@@ -7,7 +7,7 @@ import (
 	"time"
 
 	eventbus "github.com/jilio/ebu"
-	"github.com/jilio/ebus/pkg/client"
+	"github.com/jilio/ebuse/pkg/client"
 )
 
 // Example event types
@@ -31,7 +31,7 @@ type OrderDelivered struct {
 }
 
 func main() {
-	fmt.Println("=== ebus + ebu Integration Demo ===")
+	fmt.Println("=== ebuse + ebu Integration Demo ===")
 
 	// Create remote event store adapter for ebu
 	remoteStore := client.NewEventStoreAdapter(
@@ -125,7 +125,7 @@ func main() {
 	fmt.Println("\n✅ Integration successful!")
 	fmt.Println("\n💡 Key takeaways:")
 	fmt.Println("   1. Events are published to local subscribers immediately")
-	fmt.Println("   2. Events are persisted to remote ebus server automatically")
+	fmt.Println("   2. Events are persisted to remote ebuse server automatically")
 	fmt.Println("   3. Events can be replayed from remote storage")
 	fmt.Println("   4. Perfect for event sourcing and CQRS patterns")
 }

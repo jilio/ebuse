@@ -1,8 +1,8 @@
-# Multi-Tenant Guide for ebus
+# Multi-Tenant Guide for ebuse
 
 ## Overview
 
-ebus supports true multi-tenancy with **complete data isolation** between tenants. Each tenant gets:
+ebuse supports true multi-tenancy with **complete data isolation** between tenants. Each tenant gets:
 - Dedicated SQLite database file
 - Independent API key
 - Isolated event streams and positions
@@ -33,12 +33,12 @@ tenants:
 ### 2. Start Server
 
 ```bash
-./ebus -config tenants.yaml
+./ebuse -config tenants.yaml
 ```
 
 Output:
 ```
-2025/10/05 13:41:38 === ebus Multi-Tenant Server ===
+2025/10/05 13:41:38 === ebuse Multi-Tenant Server ===
 2025/10/05 13:41:38 Config file: tenants.yaml
 2025/10/05 13:41:38 Initialized 3 tenants: [alice bob charlie]
 2025/10/05 13:41:38 Data directory: data
@@ -288,7 +288,7 @@ curl -H "X-API-Key: wrong-key" http://localhost:8080/metrics
 
 **Missing Config File:**
 ```
-./ebus -config missing.yaml
+./ebuse -config missing.yaml
 # Failed to load tenants config: read config file: no such file or directory
 ```
 
@@ -315,7 +315,7 @@ To migrate from single-tenant to multi-tenant:
        api_key: "your-existing-api-key"
    ```
 3. Rename your database: `mv events.db main.db`
-4. Start with: `./ebus -config tenants.yaml`
+4. Start with: `./ebuse -config tenants.yaml`
 
 ## Best Practices
 
@@ -328,4 +328,4 @@ To migrate from single-tenant to multi-tenant:
 
 ## Conclusion
 
-Multi-tenant mode provides enterprise-grade data isolation while maintaining the simplicity and performance of ebus. Perfect for SaaS applications, managed services, and any scenario requiring strict data separation.
+Multi-tenant mode provides enterprise-grade data isolation while maintaining the simplicity and performance of ebuse. Perfect for SaaS applications, managed services, and any scenario requiring strict data separation.

@@ -1,4 +1,4 @@
-module github.com/jilio/ebus
+module github.com/jilio/ebuse
 
 go 1.24.2
 

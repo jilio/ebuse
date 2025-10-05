@@ -1,4 +1,4 @@
-package ebus
+package ebuse
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/jilio/ebus/internal/store"
+	"github.com/jilio/ebuse/internal/store"
 )
 
 // TenantConfig represents a single tenant with their API key and database

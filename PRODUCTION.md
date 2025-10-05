@@ -1,4 +1,4 @@
-# ebus Production Deployment Guide
+# ebuse Production Deployment Guide
 
 ## Performance Characteristics
 
@@ -70,7 +70,7 @@ tenants:
     api_key: "prod-key-b-very-long-random-string"
 ```
 
-Start with: `./ebus -config /etc/ebus/tenants.yaml`
+Start with: `./ebuse -config /etc/ebuse/tenants.yaml`
 
 ### Example Production Configuration
 
