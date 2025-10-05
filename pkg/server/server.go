@@ -3,12 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -127,226 +125,31 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveEvent(w http.ResponseWriter, r *http.Request) {
-	var event store.StoredEvent
-	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := s.store.Save(ctx, &event); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save event: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(event)
+	saveEventHandler(w, r, s.store)
 }
 
 func (s *Server) loadEvents(w http.ResponseWriter, r *http.Request) {
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-
-	from, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid 'from' parameter", http.StatusBadRequest)
-		return
-	}
-
-	to := int64(-1)
-	if toStr != "" {
-		to, err = strconv.ParseInt(toStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid 'to' parameter", http.StatusBadRequest)
-			return
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	events, err := s.store.Load(ctx, from, to)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load events: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(events)
+	loadEventsHandler(w, r, s.store)
 }
 
 // handleBatchEvents handles batch event insertion
 func (s *Server) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var events []*store.StoredEvent
-	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if len(events) > 1000 {
-		http.Error(w, "Batch size limited to 1000 events", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	if err := s.store.SaveBatch(ctx, events); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save batch: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"saved": len(events),
-		"first_position": events[0].Position,
-		"last_position": events[len(events)-1].Position,
-	})
+	batchEventsHandler(w, r, s.store)
 }
 
 // handleStreamEvents streams events for large replays
 func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	fromStr := r.URL.Query().Get("from")
-	batchSizeStr := r.URL.Query().Get("batch_size")
-
-	from, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid 'from' parameter", http.StatusBadRequest)
-		return
-	}
-
-	batchSize := 1000
-	if batchSizeStr != "" {
-		bs, err := strconv.Atoi(batchSizeStr)
-		if err == nil && bs > 0 && bs <= 5000 {
-			batchSize = bs
-		}
-	}
-
-	ctx := r.Context()
-
-	// Set headers for streaming
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Transfer-Encoding", "chunked")
-
-	// Use JSON array streaming
-	w.Write([]byte("["))
-	first := true
-
-	err = s.store.LoadStream(ctx, from, batchSize, func(batch []*store.StoredEvent) error {
-		for _, event := range batch {
-			if !first {
-				w.Write([]byte(","))
-			}
-			first = false
-
-			data, err := json.Marshal(event)
-			if err != nil {
-				return err
-			}
-			w.Write(data)
-
-			// Flush to client
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-		}
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Stream error: %v", err)
-	}
-
-	w.Write([]byte("]"))
+	streamEventsHandler(w, r, s.store)
 }
 
 func (s *Server) handlePosition(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	position, err := s.store.GetPosition(ctx)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"position": position})
+	positionHandler(w, r, s.store)
 }
 
 func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
-	// Extract subscription ID from path: /subscriptions/{id}/position
-	path := strings.TrimPrefix(r.URL.Path, "/subscriptions/")
-	parts := strings.Split(path, "/")
-
-	if len(parts) != 2 || parts[1] != "position" {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	subscriptionID := parts[0]
-
-	switch r.Method {
-	case http.MethodPost, http.MethodPut:
-		s.saveSubscriptionPosition(w, r, subscriptionID)
-	case http.MethodGet:
-		s.loadSubscriptionPosition(w, r, subscriptionID)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
+	subscriptionsHandler(w, r, s.store)
 }
 
-func (s *Server) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request, subscriptionID string) {
-	var req struct {
-		Position int64 `json:"position"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := s.store.SaveSubscriptionPosition(ctx, subscriptionID, req.Position); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save subscription position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) loadSubscriptionPosition(w http.ResponseWriter, r *http.Request, subscriptionID string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	position, err := s.store.LoadSubscriptionPosition(ctx, subscriptionID)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load subscription position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"position": position})
-}
 
 // handleHealth provides health check endpoint
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
