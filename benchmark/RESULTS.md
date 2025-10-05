@@ -88,14 +88,38 @@ Errors:           0
 
 ---
 
+### Test 4: POST /events/batch (Batch Writes)
+
+**Configuration**: 20 concurrent connections, 10 seconds, 10 events per batch
+
+```
+Requests/sec:     70
+Transfer/sec:     40.84KB
+Avg Req Time:     285.74ms
+Fastest:          261.25ms
+Slowest:          639.30ms
+Errors:           0
+Events/sec:       700 (70 req/s × 10 events/batch)
+```
+
+**Latency Percentiles**:
+- p50: 261.44ms
+- p75: 261.46ms
+- p99: 262.14ms
+
+**Analysis**: **11x throughput improvement** compared to single event writes! Same network latency, but batching eliminates per-event overhead. Zero errors at 20 concurrent connections with batches of 10 events.
+
+---
+
 ## Performance Summary
 
-| Operation | Safe RPS | Avg Latency | p99 Latency | Error Rate |
-|-----------|----------|-------------|-------------|------------|
-| GET /position | 177 | 282ms | 256.6ms | 0% |
-| POST /events (20c) | 64 | 310ms | 258.1ms | 0% |
-| POST /events (50c) | 141 | 354ms | 260.1ms | 4.1% |
-| GET /events (range) | 183 | 273ms | 254.9ms | 0% |
+| Operation | Safe RPS | Events/sec | Avg Latency | p99 Latency | Error Rate |
+|-----------|----------|------------|-------------|-------------|------------|
+| GET /position | 177 | - | 282ms | 256.6ms | 0% |
+| POST /events (20c) | 64 | 64 | 310ms | 258.1ms | 0% |
+| POST /events (50c) | 141 | 141 | 354ms | 260.1ms | 4.1% |
+| POST /events/batch (20c) | 70 | **700** | 286ms | 262.1ms | 0% |
+| GET /events (range) | 183 | - | 273ms | 254.9ms | 0% |
 
 **Key Findings**:
 
@@ -104,10 +128,11 @@ Errors:           0
    - Sub-300ms latency across all percentiles
    - Zero errors under load
 
-2. **Write Performance**: Good with Caveats
-   - **Safe capacity**: 64 writes/sec (20 concurrent connections)
-   - **Max capacity**: 141 writes/sec (50 connections, 4% errors)
-   - SQLite write serialization becomes bottleneck at high concurrency
+2. **Write Performance**: Excellent with Batching
+   - **Single event**: 64 events/sec (safe capacity)
+   - **Batch endpoint**: 700 events/sec (**11x improvement**)
+   - Batching eliminates per-event network round-trip overhead
+   - Same latency (~260ms), massively higher throughput
 
 3. **Latency Characteristics**:
    - Very consistent: Low standard deviation (26-62ms)
@@ -138,11 +163,12 @@ The 4.1% error rate at 50 concurrent writes indicates:
 
 ### Recommendations for Improved Write Performance
 
-1. **Use Batch Endpoint**: `/events/batch` for bulk inserts
-   - Current: 1 event per request = 1 SQLite write per request
-   - Batched: Up to 1000 events per request = 1 SQLite transaction for all
-   - Expected: 10-100x throughput improvement
-   - Reduces round-trip overhead (critical with 250ms network latency)
+1. **Use Batch Endpoint**: `/events/batch` for bulk inserts ✅ **TESTED**
+   - Single: 64 events/sec (1 event per request)
+   - Batch (10 events): 700 events/sec (**11x faster**)
+   - Batch (100 events): Up to 7000+ events/sec estimated
+   - Max: 1000 events per batch supported
+   - **Critical with 250ms network latency** - reduces round trips
 
 2. **Deploy Closer to Clients**: If low latency is critical
    - Current: Australia → Netherlands = 250ms base latency
