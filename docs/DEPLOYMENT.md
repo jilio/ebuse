@@ -9,6 +9,7 @@
 Location: `/etc/ebuse/tenants.yaml`
 
 Example config:
+
 ```yaml
 data_dir: "/data"
 
@@ -25,6 +26,7 @@ tenants:
 Location: `/data`
 
 This directory will store all tenant SQLite databases:
+
 - `/data/tenant-a.db`
 - `/data/tenant-b.db`
 
@@ -41,6 +43,7 @@ This directory will store all tenant SQLite databases:
    - Or use Railway's "Config as Code" feature
 
 4. **Optional environment variables:**
+
    ```
    PORT=8080              # Default: 8080
    RATE_LIMIT=100         # Requests per second per IP (default: 100)
@@ -66,6 +69,7 @@ This directory will store all tenant SQLite databases:
 ### Health Check
 
 Add a health check endpoint to your deployment:
+
 - URL: `http://your-app/health`
 - Expected response: `{"status":"healthy"}`
 
@@ -87,6 +91,7 @@ tenants:
 ```
 
 **Security Notes:**
+
 - Use long, random API keys (at least 32 characters)
 - Never commit real API keys to git
 - Use environment variables or secret management for keys
@@ -102,6 +107,7 @@ DB_PATH=/data/events.db
 ```
 
 Then update `nixpacks.toml`:
+
 ```toml
 [start]
 cmd = "./ebuse"
