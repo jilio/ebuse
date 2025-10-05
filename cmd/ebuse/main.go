@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +19,13 @@ func main() {
 	configPath := flag.String("config", "", "Path to tenants.yaml for multi-tenant mode")
 	flag.Parse()
 
-	log.Println("=== ebuse Server ===")
+	// Setup structured logging
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
+	slog.Info("Starting ebuse server")
 
 	// Load configuration from environment
 	config := ebuse.LoadConfigFromEnv()
@@ -28,20 +34,25 @@ func main() {
 
 	// Check if running in multi-tenant mode
 	if *configPath != "" {
-		log.Printf("Config file: %s", *configPath)
+		slog.Info("Running in multi-tenant mode", "config_file", *configPath)
 		tenantsConfig, err := ebuse.LoadTenantsConfig(*configPath)
 		if err != nil {
-			log.Fatalf("Failed to load tenants config: %v", err)
+			slog.Error("Failed to load tenants config", "error", err)
+			os.Exit(1)
 		}
 
 		tenantManager, err := ebuse.NewTenantManager(tenantsConfig)
 		if err != nil {
-			log.Fatalf("Failed to create tenant manager: %v", err)
+			slog.Error("Failed to create tenant manager", "error", err)
+			os.Exit(1)
 		}
 		defer tenantManager.Close()
 
-		log.Printf("Initialized %d tenants: %v", len(tenantsConfig.Tenants), tenantManager.GetAllTenants())
-		log.Printf("Data directory: %s", tenantsConfig.DataDir)
+		tenants := tenantManager.GetAllTenants()
+		slog.Info("Initialized multi-tenant mode",
+			"tenant_count", len(tenantsConfig.Tenants),
+			"tenants", tenants,
+			"data_dir", tenantsConfig.DataDir)
 
 		serverConfig := &server.Config{
 			RateLimit:  config.RateLimit,
@@ -55,13 +66,17 @@ func main() {
 	} else {
 		// Single-tenant mode
 		if config.APIKey == "" {
-			log.Fatal("API_KEY environment variable must be set (or use -config for multi-tenant mode)")
+			slog.Error("API_KEY environment variable must be set (or use -config for multi-tenant mode)")
+			os.Exit(1)
 		}
+
+		slog.Info("Running in single-tenant mode", "db_path", config.DBPath)
 
 		// Create SQLite store
 		sqliteStore, err := store.NewSQLiteStore(config.DBPath)
 		if err != nil {
-			log.Fatalf("Failed to create store: %v", err)
+			slog.Error("Failed to create store", "error", err, "db_path", config.DBPath)
+			os.Exit(1)
 		}
 		defer sqliteStore.Close()
 
@@ -75,8 +90,6 @@ func main() {
 		srv := server.NewWithConfig(sqliteStore, serverConfig, config.APIKey)
 		defer srv.Close()
 		httpHandler = srv
-
-		log.Printf("Database: %s", config.DBPath)
 	}
 
 	// Create HTTP server
@@ -90,26 +103,34 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Server listening on :%s", config.Port)
+		slog.Info("Server started",
+			"port", config.Port,
+			"rate_limit", config.RateLimit,
+			"rate_burst", config.RateBurst,
+			"gzip_enabled", config.EnableGzip,
+			"read_timeout", config.ReadTimeout,
+			"write_timeout", config.WriteTimeout)
+
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			slog.Error("Server failed", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
 
-	log.Println("Shutting down server...")
+	slog.Info("Received shutdown signal", "signal", sig.String())
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
 	defer cancel()
 
 	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		slog.Error("Server forced to shutdown", "error", err)
+	} else {
+		slog.Info("Server stopped gracefully")
 	}
-
-	log.Println("Server stopped")
 }
