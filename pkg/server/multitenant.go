@@ -3,11 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -146,23 +143,7 @@ func (s *MultiTenantServer) saveEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	var event store.StoredEvent
-	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := tenantStore.Save(ctx, &event); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save event: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(event)
+	saveEventHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) loadEvents(w http.ResponseWriter, r *http.Request) {
@@ -171,164 +152,34 @@ func (s *MultiTenantServer) loadEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-
-	from, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid 'from' parameter", http.StatusBadRequest)
-		return
-	}
-
-	to := int64(-1)
-	if toStr != "" {
-		to, err = strconv.ParseInt(toStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid 'to' parameter", http.StatusBadRequest)
-			return
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	events, err := tenantStore.Load(ctx, from, to)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load events: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(events)
+	loadEventsHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) handleBatchEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	tenantStore, _, ok := getTenantStore(r)
 	if !ok {
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	var events []*store.StoredEvent
-	if err := json.NewDecoder(r.Body).Decode(&events); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if len(events) > 1000 {
-		http.Error(w, "Batch size limited to 1000 events", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-
-	if err := tenantStore.SaveBatch(ctx, events); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save batch: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"saved":          len(events),
-		"first_position": events[0].Position,
-		"last_position":  events[len(events)-1].Position,
-	})
+	batchEventsHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	tenantStore, _, ok := getTenantStore(r)
 	if !ok {
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	fromStr := r.URL.Query().Get("from")
-	batchSizeStr := r.URL.Query().Get("batch_size")
-
-	from, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid 'from' parameter", http.StatusBadRequest)
-		return
-	}
-
-	batchSize := 1000
-	if batchSizeStr != "" {
-		bs, err := strconv.Atoi(batchSizeStr)
-		if err == nil && bs > 0 && bs <= 5000 {
-			batchSize = bs
-		}
-	}
-
-	ctx := r.Context()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Transfer-Encoding", "chunked")
-
-	w.Write([]byte("["))
-	first := true
-
-	err = tenantStore.LoadStream(ctx, from, batchSize, func(batch []*store.StoredEvent) error {
-		for _, event := range batch {
-			if !first {
-				w.Write([]byte(","))
-			}
-			first = false
-
-			data, err := json.Marshal(event)
-			if err != nil {
-				return err
-			}
-			w.Write(data)
-
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-		}
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Stream error: %v", err)
-	}
-
-	w.Write([]byte("]"))
+	streamEventsHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) handlePosition(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	tenantStore, _, ok := getTenantStore(r)
 	if !ok {
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	position, err := tenantStore.GetPosition(ctx)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"position": position})
+	positionHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
@@ -337,59 +188,7 @@ func (s *MultiTenantServer) handleSubscriptions(w http.ResponseWriter, r *http.R
 		http.Error(w, "Internal server error: tenant context missing", http.StatusInternalServerError)
 		return
 	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/subscriptions/")
-	parts := strings.Split(path, "/")
-
-	if len(parts) != 2 || parts[1] != "position" {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	subscriptionID := parts[0]
-
-	switch r.Method {
-	case http.MethodPost, http.MethodPut:
-		s.saveSubscriptionPosition(w, r, tenantStore, subscriptionID)
-	case http.MethodGet:
-		s.loadSubscriptionPosition(w, r, tenantStore, subscriptionID)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *MultiTenantServer) saveSubscriptionPosition(w http.ResponseWriter, r *http.Request, tenantStore *store.SQLiteStore, subscriptionID string) {
-	var req struct {
-		Position int64 `json:"position"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := tenantStore.SaveSubscriptionPosition(ctx, subscriptionID, req.Position); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save subscription position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *MultiTenantServer) loadSubscriptionPosition(w http.ResponseWriter, r *http.Request, tenantStore *store.SQLiteStore, subscriptionID string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	position, err := tenantStore.LoadSubscriptionPosition(ctx, subscriptionID)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load subscription position: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{"position": position})
+	subscriptionsHandler(w, r, tenantStore)
 }
 
 func (s *MultiTenantServer) handleHealth(w http.ResponseWriter, r *http.Request) {
