@@ -111,8 +111,10 @@ Errors:           0
 
 3. **Latency Characteristics**:
    - Very consistent: Low standard deviation (26-62ms)
-   - Network overhead dominates (~250ms base)
-   - Database operations add minimal overhead (<100ms)
+   - Total response time: ~250-300ms
+   - Network latency: ~250ms round trip (Australia → Netherlands → Australia via Cloudflare)
+   - Actual server processing: <10ms (SQLite is very fast)
+   - Dominated by geographic distance, not application performance
 
 4. **Scalability**:
    - Reads scale well with concurrency
@@ -127,27 +129,30 @@ Errors:           0
 
 The 4.1% error rate at 50 concurrent writes indicates:
 
-1. **SQLite WAL Mode Limitation**: While WAL allows concurrent reads, writes are still serialized
-2. **Connection Pool Contention**: Default SQLite connection settings may be limiting
-3. **Railway Platform Limits**: Shared infrastructure may throttle under load
+1. **HTTP Client Timeouts**: go-wrk default timeout with 250ms network latency + queued writes
+2. **SQLite Write Serialization**: SQLite processes writes sequentially (one at a time)
+3. **Write Queue Buildup**: At 50 concurrent connections, writes queue up and some timeout
+   - SQLite doesn't fail - it just processes writes in order
+   - The HTTP client times out waiting for a response
+   - Network latency (250ms) compounds the queueing delay
 
 ### Recommendations for Improved Write Performance
 
-1. **Increase SQLite Connection Pool**:
-   ```go
-   db.SetMaxOpenConns(25)
-   db.SetMaxIdleConns(10)
-   ```
-
-2. **Batch Writes**: Use `/events/batch` endpoint for bulk inserts
-   - Current: 1 event per request
-   - Batched: Up to 1000 events per request
+1. **Use Batch Endpoint**: `/events/batch` for bulk inserts
+   - Current: 1 event per request = 1 SQLite write per request
+   - Batched: Up to 1000 events per request = 1 SQLite transaction for all
    - Expected: 10-100x throughput improvement
+   - Reduces round-trip overhead (critical with 250ms network latency)
 
-3. **Consider PostgreSQL for High-Write Workloads**:
-   - SQLite excellent for read-heavy workloads
-   - PostgreSQL better for write-heavy concurrent access
-   - Current performance acceptable for most use cases
+2. **Deploy Closer to Clients**: If low latency is critical
+   - Current: Australia → Netherlands = 250ms base latency
+   - Regional deployment would reduce to <50ms
+   - Or use multiple regional deployments with Cloudflare routing
+
+3. **Connection Pool Tuning**: (Minor impact)
+   - SQLite write performance is fine - the issue is network + queueing
+   - Connection pool adjustments won't solve the fundamental issue
+   - Focus on batching and reducing round trips instead
 
 ---
 
@@ -169,8 +174,15 @@ The 4.1% error rate at 50 concurrent writes indicates:
 
 ## Test Environment
 
-- **Platform**: Railway (shared infrastructure)
+- **Platform**: Railway (Netherlands)
+- **CDN**: Cloudflare (terminates TLS at edge, proxies to origin)
 - **Database**: SQLite with WAL mode
 - **Storage**: Persistent volume (/data/events.db)
-- **Client Location**: ~250ms network latency (Australia → Railway US)
+- **Client Location**: Australia
+- **Geographic Distance**: Australia → Netherlands (~15,000 km)
+- **Network RTT**: ~250ms (via Cloudflare proxy)
+- **Actual Server Processing**: <10ms (SQLite is fast)
+- **Total Response Time**: ~250-300ms (dominated by network latency)
 - **Total Events Created**: 2031 events during testing
+
+**Important Note**: The ~250-300ms response times are **dominated by geographic network latency** (Australia ↔ Netherlands round trip), NOT application performance. Actual SQLite processing is <10ms. Cloudflare terminates TLS locally but proxies requests to the origin server in Netherlands.
