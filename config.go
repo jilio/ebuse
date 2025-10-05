@@ -17,6 +17,7 @@ type ProductionConfig struct {
 
 	// Database
 	DBPath            string
+	StoreBackend      string  // "sqlite" or "pebble"
 
 	// Rate Limiting
 	RateLimit         int
@@ -41,6 +42,7 @@ func LoadConfigFromEnv() *ProductionConfig {
 
 		// Database defaults
 		DBPath:          getEnv("DB_PATH", "events.db"),
+		StoreBackend:    getEnv("STORE_BACKEND", "pebble"),
 
 		// Rate limiting defaults (per IP)
 		RateLimit:       parseInt("RATE_LIMIT", 100),

@@ -115,7 +115,8 @@ func TestNewTenantManager(t *testing.T) {
 			{Name: "tenant1", APIKey: "key1"},
 			{Name: "tenant2", APIKey: "key2"},
 		},
-		DataDir: tmpDir,
+		DataDir:      tmpDir,
+		StoreBackend: "sqlite",
 	}
 
 	tm, err := NewTenantManager(config)
@@ -129,7 +130,7 @@ func TestNewTenantManager(t *testing.T) {
 		t.Errorf("expected 2 tenants, got %d", len(tm.tenants))
 	}
 
-	// Verify database files exist
+	// Verify database files exist (SQLite backend)
 	db1 := filepath.Join(tmpDir, "tenant1.db")
 	db2 := filepath.Join(tmpDir, "tenant2.db")
 
